@@ -1,5 +1,5 @@
-# Gradio RAG utility for single pdf files
-Within this repo there are two scripts to execute a web application for RAG tasks. Both scripts will generate a simple Retrieval-Augmented Generation (RAG) web application for single pdf documents via Gradio. However, there are differences in the implementation of each.
+# Gradio Retreival-Augmented Generation (RAG) utility for pdf files
+Ever have a large document that you need summarized, or have proprietary information you need to retrieve quickly? Retrieval-Augmented Generation (RAG) is a form of generative AI that can help. Within this repo there are two scripts to execute a web application for RAG tasks. Both scripts will launch a simple RAG web application for single pdf documents via Gradio. Each script showcases a different use-case, depending on the level of privacy desired. ```qabot.py``` uses an IBM LLM API for fast processing, but runs in IBMs cloud. Should users desire something run locally for privacy concerns, ```Huggingface_RAG.py``` provides that solution, using a medium weight LLM to balance performance and resources.
 
 
 ### qabot.py for Langchain 0.0 versions
