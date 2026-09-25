@@ -10,9 +10,11 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_huggingface import HuggingFacePipeline
-from langchain import hub
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
+
+#from langchain import hub
+from langchain_core.prompts import ChatPromptTemplate
 
 import gradio as gr
 
@@ -46,10 +48,11 @@ def get_llm():
         tokenizer=tokenizer,
         task="text-generation",
         do_sample=True,
-        temperature=0.2,
+        temperature=0.01,
         repetition_penalty=1.1,
         return_full_text=False,
-        max_new_tokens=500
+        max_new_tokens=500,
+        device_map="auto"
     )
     HuggingFace_llm = HuggingFacePipeline(pipeline=llm)
     return HuggingFace_llm
@@ -73,7 +76,8 @@ def text_splitter(data):
 ## Embedding model
 def HuggingFace_embedding():
     granite_embedding = HuggingFaceEmbeddings(
-        model_name="BAAI/bge-small-en-v1.5",
+        #model_name="BAAI/bge-small-en-v1.5",
+        model_name="Salesforce/SFR-Embedding-Mistral",
     )
     return granite_embedding
 
@@ -98,13 +102,22 @@ def retriever(file):
 def retriever_qa(file, query):
     llm = get_llm()
     retriever_obj = retriever(file)
-    retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
+    #retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
+    retrieval_qa_chat_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are an assistant for question-answering tasks. Use only the following pieces of retrieved context to answer the question. Do not include information outside of the retrieved context. If you don't know the answer, just say that you don't know. \n\n{context}"),
+    ("human", "{input}"), # 'input' is the variable for the user's question
+    ])
     combine_docs_chain = create_stuff_documents_chain(llm, retrieval_qa_chat_prompt)
     rag_chain = create_retrieval_chain(retriever_obj, combine_docs_chain)
     
     response = rag_chain.invoke({"input": query})
     return response.get("answer")
 
+
+##########################################
+## Test CUDA availability
+##########################################
+print(torch.cuda.is_available())
 
 
 ##########################################

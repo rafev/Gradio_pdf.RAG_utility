@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Build outputs / local state
+data/
+frontend/dist/
+frontend/node_modules/
+.gradio/
+
+# Corpus PDFs (often not redistributable) — remove this line to version them
+corpus/**/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

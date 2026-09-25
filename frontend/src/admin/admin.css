@@ -1,0 +1,40 @@
+.admin { min-height: 100%; }
+.admin-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.conn { font-size: 12px; color: var(--danger); }
+.conn.ok { color: var(--ok); }
+.admin-main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; display: flex; flex-direction: column; gap: 28px; }
+.admin-main h2 { font-size: 1rem; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+.count { background: var(--accent-strong); color: #fff; border-radius: 999px; padding: 0 8px; font-size: 12px; }
+.banner { padding: 10px 14px; border-radius: 10px; background: #3a2410; border: 1px solid #7a4a1a; color: #ffd6a8; }
+
+.request-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.request-card {
+  padding: 14px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--line-strong);
+  display: flex; flex-direction: column; gap: 8px; animation: fade-in 0.3s ease-out;
+}
+.request-card .who { display: flex; flex-direction: column; }
+.request-card .reason { margin: 0; color: var(--text-2); }
+.request-card .ua { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.request-card .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.request-card label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.request-card label.check { flex-direction: row; align-items: center; gap: 6px; }
+.request-card select, .request-card input[type="number"] {
+  padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); width: 90px;
+}
+.request-card .actions { display: flex; gap: 8px; }
+button.secondary.small { padding: 0.35rem 0.8rem; font-size: 0.85rem; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+table.sessions { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.sessions th, .sessions td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.sessions th { font-size: 12px; color: var(--muted); font-weight: 500; background: var(--panel); }
+.sessions .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sessions tr.inactive td { color: var(--muted); }
+.sessions tfoot td { border-bottom: 0; }
+.tag { margin-left: 6px; font-size: 11px; padding: 0 6px; border-radius: 999px; background: #1b2b4a; color: #cfe3ff; }
+button.ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+.recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.status { font-size: 12px; padding: 0 6px; border-radius: 999px; background: var(--panel-2); }
+.status.denied { color: var(--danger); }
+.status.claimed { color: var(--ok); }

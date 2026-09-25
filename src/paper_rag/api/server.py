@@ -1,0 +1,207 @@
+"""Public app: graph + papers REST, streaming chat, access requests, and the built frontend.
+
+In public mode this is the only port the Cloudflare tunnel exposes. It never serves admin routes.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
+
+from paper_rag.api.access import AccessError, Session
+from paper_rag.api.sse import sse_response
+from paper_rag.api.state import AppState
+from paper_rag.graph.export import node_detail, to_force_graph
+from paper_rag.graph.store import paper_node
+
+log = logging.getLogger(__name__)
+
+SESSION_COOKIE = "prag_session"
+MAX_QUESTION = 2000
+
+NOT_BUILT_HTML = """<!doctype html><meta charset="utf-8"><title>Paper RAG</title>
+<body style="font-family:system-ui;background:#0b0f19;color:#e6e9f2;padding:3rem">
+<h1>Frontend not built</h1><p>Run <code>npm install</code> and <code>npm run build</code> in <code>frontend/</code>,
+or use the Vite dev server (<code>npm run dev</code>) during development.</p></body>"""
+
+
+class AccessRequestBody(BaseModel):
+    name: str = Field(max_length=200)
+    reason: str = Field(default="", max_length=1000)
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatBody(BaseModel):
+    question: str
+    history: list[ChatTurn] = Field(default_factory=list, max_length=40)
+
+
+def client_ip(request: Request) -> str | None:
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else None)
+
+
+def is_https(request: Request) -> bool:
+    return (request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+            or '"https"' in request.headers.get("cf-visitor", ""))
+
+
+def set_session_cookie(response: Response, request: Request, token: str, max_age: int) -> None:
+    response.set_cookie(SESSION_COOKIE, token, max_age=max_age, httponly=True, secure=is_https(request),
+                        samesite="strict", path="/")
+
+
+def access_error_response(exc: AccessError) -> JSONResponse:
+    return JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status)
+
+
+def create_public_app(state: AppState) -> FastAPI:
+    app = FastAPI(title="Paper RAG", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.exception_handler(AccessError)
+    async def _access_error(_: Request, exc: AccessError) -> JSONResponse:
+        return access_error_response(exc)
+
+    def require_session(request: Request) -> Session | None:
+        if not state.gated:
+            return None
+        assert state.access is not None
+        return state.access.validate(request.cookies.get(SESSION_COOKIE))
+
+    # ------------------------------------------------------------------ access
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        kg = state.refresh_graph()
+        return {"status": "ok", "gated": state.gated, "papers": len(kg.paper_ids()), "chunks": state.vs.count()}
+
+    @app.get("/api/access/me")
+    def access_me(request: Request) -> dict[str, Any]:
+        if not state.gated:
+            return {"gated": False, "authorized": True}
+        assert state.access is not None
+        try:
+            s = state.access.validate(request.cookies.get(SESSION_COOKIE))
+        except AccessError as exc:
+            return {"gated": True, "authorized": False, "reason": exc.code, "paused": state.access.paused}
+        return {"gated": True, "authorized": True, "name": s.name, "expires_at": s.expires_at,
+                "questions_left": s.questions_left, "is_admin": s.is_admin}
+
+    @app.post("/api/access/request")
+    def access_request(body: AccessRequestBody, request: Request) -> dict[str, str]:
+        if not state.gated:
+            raise HTTPException(404)
+        assert state.access is not None
+        rid, secret = state.access.create_request(body.name, body.reason, client_ip(request),
+                                                  request.headers.get("user-agent"))
+        return {"request_id": rid, "claim_secret": secret}
+
+    @app.get("/api/access/status/{request_id}")
+    def access_status(request_id: str, request: Request) -> Response:
+        if not state.gated:
+            raise HTTPException(404)
+        assert state.access is not None
+        status, token = state.access.check_request(request_id, request.headers.get("x-claim-secret", ""))
+        response = JSONResponse({"status": status})
+        if token:
+            set_session_cookie(response, request, token, int(state.access.default_hours * 3600) + 3600)
+        return response
+
+    @app.get("/api/access/redeem")
+    def access_redeem(code: str, request: Request) -> Response:
+        """One-time admin login link generated by the admin console."""
+        if not state.gated:
+            return RedirectResponse("/", status_code=303)
+        assert state.access is not None
+        token = state.access.redeem_login_code(code)
+        response = RedirectResponse("/", status_code=303)
+        set_session_cookie(response, request, token, 7 * 24 * 3600)
+        return response
+
+    # ------------------------------------------------------------------ data
+    @app.get("/api/graph")
+    def graph(_: Session | None = Depends(require_session)) -> dict[str, Any]:
+        return to_force_graph(state.refresh_graph())
+
+    @app.get("/api/papers")
+    def papers(_: Session | None = Depends(require_session)) -> list[dict[str, Any]]:
+        kg = state.refresh_graph()
+        rows = []
+        for _n, a in kg.papers():
+            rows.append({k: a.get(k) for k in ("paper_id", "label", "authors", "year", "venue", "n_chunks", "source_file")})
+        return sorted(rows, key=lambda r: (-(r["year"] or 0), r["label"] or ""))
+
+    @app.get("/api/node/{node_id:path}")
+    def node(node_id: str, _: Session | None = Depends(require_session)) -> dict[str, Any]:
+        kg = state.refresh_graph()
+        resolved = kg.resolve(node_id)
+        if resolved is None:
+            raise HTTPException(404, "Unknown node")
+        return node_detail(kg, resolved)
+
+    @app.get("/api/passage/{paper_id}/{page}")
+    def passage(paper_id: str, page: int, _: Session | None = Depends(require_session)) -> dict[str, Any]:
+        kg = state.refresh_graph()
+        pnode = paper_node(paper_id)
+        hits = state.vs.page_passages(paper_id, page)
+        return {"paper_id": paper_id, "page": page, "title": kg.g.nodes[pnode]["label"] if pnode in kg.g else paper_id,
+                "passages": [{"chunk_id": h.chunk_id, "section": h.section, "text": h.text} for h in hits]}
+
+    # ------------------------------------------------------------------ chat
+    @app.post("/api/chat")
+    async def chat(body: ChatBody, request: Request, session: Session | None = Depends(require_session)) -> Response:
+        question = body.question.strip()
+        if not question:
+            raise HTTPException(400, "Empty question")
+        if len(question) > MAX_QUESTION:
+            raise HTTPException(400, f"Question is longer than {MAX_QUESTION} characters")
+        if session is not None:
+            assert state.access is not None
+            if session.id in state.active_sessions:
+                raise AccessError("busy", 409, "You already have a question in progress.")
+            state.access.begin_question(session)
+            state.active_sessions.add(session.id)
+        state.refresh_graph()
+        history = [t.model_dump() for t in body.history]
+
+        async def events() -> AsyncIterator[dict[str, Any]]:
+            if state.semaphore.locked():
+                yield {"type": "status", "message": "Waiting for a free slot…"}
+            async with state.semaphore:
+                async for event in state.agent.run(question, history):
+                    if event["type"] == "done" and session is not None and state.access is not None:
+                        state.access.record_usage(session.id, event["usage"], event.get("model", ""))
+                        event = {**event, "questions_left": state.access.questions_left(session.id)}
+                    yield event
+
+        def on_close() -> None:
+            if session is not None:
+                state.active_sessions.discard(session.id)
+
+        return sse_response(request, events(), on_close)
+
+    # ------------------------------------------------------------------ frontend
+    dist: Path = state.settings.frontend_dist
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str) -> Response:
+        if path.startswith("api/"):
+            raise HTTPException(404)
+        if path.startswith("admin") or path.endswith("admin.html"):
+            raise HTTPException(404)  # the admin console lives on its own localhost-only port
+        if not (dist / "index.html").exists():
+            return HTMLResponse(NOT_BUILT_HTML)
+        candidate = (dist / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+    return app
